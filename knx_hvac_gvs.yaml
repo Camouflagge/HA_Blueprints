@@ -117,7 +117,7 @@ blueprint:
             text:
         swing_on_name:
           name: Swing-Name für „an" (KNX 1)
-          default: "on"
+          default: "both"
           selector:
             text:
         swing_off_name:
