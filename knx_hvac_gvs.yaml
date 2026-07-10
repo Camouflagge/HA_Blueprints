@@ -155,11 +155,11 @@ variables:
     - !input swing_on_name
   # KNX 20.105 -> HA hvac_mode
   mode_knx_to_ha:
-    0: !input auto_hvac_mode
-    1: heat
-    3: cool
-    9: fan_only
-    14: dry
+    "0": !input auto_hvac_mode
+    "1": heat
+    "3": cool
+    "9": fan_only
+    "14": dry
   # HA hvac_mode -> KNX 20.105
   mode_ha_to_knx:
     heat: 1
