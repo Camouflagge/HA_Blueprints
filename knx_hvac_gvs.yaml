@@ -1,1 +1,905 @@
+blueprint:
+  name: Klimaanlage über KNX steuern (5 Steuer- + 5 Status-Objekte)
+  description: >
+    Spiegelt eine Home-Assistant-Climate-Entität auf KNX-Gruppenadressen –
+    gleicher Ansatz wie das KNX-Daikin-Blueprint von kalhimeo, aber reduziert
+    auf genau 5 Steuer- und 5 Status-Objekte.
 
+    Steuerung (KNX -> HA):
+      * Schalten        DPT 1.001   (0/1)
+      * Sollwert        DPT 9.001   (°C)
+      * Lüfterstufe     DPT 5.010   (0=Auto, 1, 2, 3)
+      * Schwingen       DPT 1.001   (0/1)
+      * HVAC-Modus      DPT 20.105  (0=Auto, 1=Heizen, 3=Kühlen, 9=Lüfter, 14=Entfeuchten)
+
+    Rückmeldung (HA -> KNX) über die 5 Status-Gruppenadressen, inkl. Antwort
+    auf KNX-Leseanfragen (GroupValueRead) und Re-Registrierung nach Neustart
+    bzw. Automations-Reload.
+
+    Wichtig: Steuer- und Status-GA müssen unterschiedlich sein (sonst Rückkopplung).
+  domain: automation
+  author: Claude (nach dem Ansatz von kalhimeo)
+
+  input:
+    climate_entity:
+      name: Climate-Entität
+      description: Die in Home Assistant zu steuernde Klimaanlage.
+      selector:
+        entity:
+          domain: climate
+
+    steuerung:
+      name: Steuer-Gruppenadressen (KNX -> HA)
+      icon: mdi:import
+      collapsed: false
+      input:
+        on_off_address:
+          name: Schalten (DPT 1.001)
+          description: "GA zum Ein-/Ausschalten. Beispiel: '3/0/0' (leer = ungenutzt)"
+          default: ""
+        target_temperature_address:
+          name: Sollwert Temperatur (DPT 9.001)
+          description: "GA für die Zieltemperatur. Beispiel: '3/0/1' (leer = ungenutzt)"
+          default: ""
+        speed_address:
+          name: Lüftergeschwindigkeit (DPT 5.010)
+          description: "GA für die Lüfterstufe (0=Auto, 1, 2, 3). Beispiel: '3/0/2' (leer = ungenutzt)"
+          default: ""
+        swing_address:
+          name: Schwingen (DPT 1.001)
+          description: "GA für Swing an/aus. Beispiel: '3/0/3' (leer = ungenutzt)"
+          default: ""
+        mode_address:
+          name: HVAC-Modus (DPT 20.105)
+          description: >
+            GA für den Betriebsmodus (0=Auto, 1=Heizen, 3=Kühlen, 9=Lüfter,
+            14=Entfeuchten). Beispiel: '3/0/4' (leer = ungenutzt)
+          default: ""
+
+    status:
+      name: Status-Gruppenadressen (HA -> KNX Rückmeldung)
+      icon: mdi:export
+      collapsed: false
+      input:
+        on_off_state_address:
+          name: Schalten Status (DPT 1.001)
+          description: "GA für die Ein/Aus-Rückmeldung. Beispiel: '3/1/0' (leer = ungenutzt)"
+          default: ""
+        target_temperature_state_address:
+          name: Sollwert Status (DPT 9.001)
+          description: "GA für die Sollwert-Rückmeldung. Beispiel: '3/1/1' (leer = ungenutzt)"
+          default: ""
+        speed_state_address:
+          name: Lüfter Status (DPT 5.010)
+          description: "GA für die Lüfterstufen-Rückmeldung. Beispiel: '3/1/2' (leer = ungenutzt)"
+          default: ""
+        swing_state_address:
+          name: Schwingen Status (DPT 1.001)
+          description: "GA für die Swing-Rückmeldung. Beispiel: '3/1/3' (leer = ungenutzt)"
+          default: ""
+        mode_state_address:
+          name: HVAC-Modus Status (DPT 20.105)
+          description: "GA für die Modus-Rückmeldung. Beispiel: '3/1/4' (leer = ungenutzt)"
+          default: ""
+
+    zuordnung:
+      name: Zuordnung / Mapping (nur anpassen, falls deine Entität andere Namen nutzt)
+      icon: mdi:swap-horizontal
+      collapsed: true
+      input:
+        auto_hvac_mode:
+          name: HA-Modus für „Automatik" (KNX 0)
+          description: >
+            HVAC-Modus, der bei KNX-Wert 0 gesetzt wird. Übliche Werte:
+            'heat_cool' oder 'auto' – je nachdem was deine Klimaanlage unterstützt.
+          default: heat_cool
+          selector:
+            text:
+        fan_auto_name:
+          name: Lüfter-Name für KNX 0 (Auto)
+          default: auto
+          selector:
+            text:
+        fan_1_name:
+          name: Lüfter-Name für KNX 1
+          default: low
+          selector:
+            text:
+        fan_2_name:
+          name: Lüfter-Name für KNX 2
+          default: medium
+          selector:
+            text:
+        fan_3_name:
+          name: Lüfter-Name für KNX 3
+          default: high
+          selector:
+            text:
+        swing_on_name:
+          name: Swing-Name für „an" (KNX 1)
+          default: "on"
+          selector:
+            text:
+        swing_off_name:
+          name: Swing-Name für „aus" (KNX 0)
+          default: "off"
+          selector:
+            text:
+
+mode: parallel
+max_exceeded: silent
+
+variables:
+  climate_entity: !input climate_entity
+  on_off_address: !input on_off_address
+  target_temperature_address: !input target_temperature_address
+  speed_address: !input speed_address
+  swing_address: !input swing_address
+  mode_address: !input mode_address
+  on_off_state_address: !input on_off_state_address
+  target_temperature_state_address: !input target_temperature_state_address
+  speed_state_address: !input speed_state_address
+  swing_state_address: !input swing_state_address
+  mode_state_address: !input mode_state_address
+  auto_hvac_mode: !input auto_hvac_mode
+  swing_on_name: !input swing_on_name
+  swing_off_name: !input swing_off_name
+  # KNX-Code 0..3 == Listenindex
+  fan_names:
+    - !input fan_auto_name
+    - !input fan_1_name
+    - !input fan_2_name
+    - !input fan_3_name
+  swing_names:
+    - !input swing_off_name
+    - !input swing_on_name
+  # KNX 20.105 -> HA hvac_mode
+  mode_knx_to_ha:
+    "0": !input auto_hvac_mode
+    "1": heat
+    "3": cool
+    "9": fan_only
+    "14": dry
+  # HA hvac_mode -> KNX 20.105
+  mode_ha_to_knx:
+    heat: 1
+    cool: 3
+    fan_only: 9
+    dry: 14
+    auto: 0
+    heat_cool: 0
+
+trigger:
+  # --- Re-Registrierung nach Start / Reload ---
+  - platform: homeassistant
+    event: start
+    id: "initialize"
+  - platform: event
+    event_type: automation_reloaded
+    id: "initialize"
+  - platform: event
+    event_type: service_registered
+    event_data:
+      domain: knx
+      service: event_register
+    id: "initialize"
+
+  # --- HA-Zustandsänderung der Klimaanlage -> Status auf KNX schieben ---
+  - platform: state
+    entity_id: !input climate_entity
+    id: "climate_entity"
+
+  # --- Eingehende KNX-Steuerbefehle (GroupValueWrite) ---
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input on_off_address
+      telegramtype: GroupValueWrite
+      direction: Incoming
+    id: "on_off"
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input target_temperature_address
+      telegramtype: GroupValueWrite
+      direction: Incoming
+    id: "target_temperature"
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input speed_address
+      telegramtype: GroupValueWrite
+      direction: Incoming
+    id: "speed"
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input swing_address
+      telegramtype: GroupValueWrite
+      direction: Incoming
+    id: "swing"
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input mode_address
+      telegramtype: GroupValueWrite
+      direction: Incoming
+    id: "mode"
+
+  # --- KNX-Leseanfragen auf Status-GAs (GroupValueRead) -> Status neu senden ---
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input on_off_state_address
+      telegramtype: GroupValueRead
+      direction: Incoming
+    id: "read_states"
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input target_temperature_state_address
+      telegramtype: GroupValueRead
+      direction: Incoming
+    id: "read_states"
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input speed_state_address
+      telegramtype: GroupValueRead
+      direction: Incoming
+    id: "read_states"
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input swing_state_address
+      telegramtype: GroupValueRead
+      direction: Incoming
+    id: "read_states"
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input mode_state_address
+      telegramtype: GroupValueRead
+      direction: Incoming
+    id: "read_states"
+
+action:
+  # ===================================================================
+  # 1) Event-Registrierung (nur bei Start / Reload)
+  #    event_register ist NICHT persistent -> muss nach jedem Neustart erfolgen
+  # ===================================================================
+  - if: "{{ trigger.id == 'initialize' }}"
+    then:
+      - if: "{{ on_off_address != '' }}"
+        then:
+          - service: knx.event_register
+            data:
+              address: "{{ on_off_address }}"
+      - if: "{{ target_temperature_address != '' }}"
+        then:
+          - service: knx.event_register
+            data:
+              address: "{{ target_temperature_address }}"
+              type: "temperature"
+      - if: "{{ speed_address != '' }}"
+        then:
+          - service: knx.event_register
+            data:
+              address: "{{ speed_address }}"
+              type: "pulse"
+      - if: "{{ swing_address != '' }}"
+        then:
+          - service: knx.event_register
+            data:
+              address: "{{ swing_address }}"
+      - if: "{{ mode_address != '' }}"
+        then:
+          - service: knx.event_register
+            data:
+              address: "{{ mode_address }}"
+              type: "pulse"
+      # Status-GAs registrieren, damit Leseanfragen ein knx_event auslösen
+      - repeat:
+          for_each:
+            - "{{ on_off_state_address }}"
+            - "{{ target_temperature_state_address }}"
+            - "{{ speed_state_address }}"
+            - "{{ swing_state_address }}"
+            - "{{ mode_state_address }}"
+          sequence:
+            - if: "{{ repeat.item != '' }}"
+              then:
+                - service: knx.event_register
+                  data:
+                    address: "{{ repeat.item }}"
+
+  # ===================================================================
+  # 2) Eingehende KNX-Steuerbefehle -> Climate-Entität steuern
+  # ===================================================================
+  - choose:
+      # ---- Schalten (1-Bit) ----
+      - conditions:
+          - condition: trigger
+            id: "on_off"
+        sequence:
+          - variables:
+              d: "{{ trigger.event.data.data }}"
+              bit: >
+                {{ (d[0] if d is sequence and d is not string else d) | int(0) }}
+          - if: "{{ bit > 0 }}"
+            then:
+              - service: climate.turn_on
+                target:
+                  entity_id: "{{ climate_entity }}"
+            else:
+              - service: climate.turn_off
+                target:
+                  entity_id: "{{ climate_entity }}"
+
+      # ---- Sollwert (DPT 9.001) ----
+      - conditions:
+          - condition: trigger
+            id: "target_temperature"
+        sequence:
+          - service: climate.set_temperature
+            target:
+              entity_id: "{{ climate_entity }}"
+            data:
+              temperature: "{{ trigger.event.data.value | float }}"
+
+      # ---- Lüfterstufe (DPT 5.010, 0..3) ----
+      - conditions:
+          - condition: trigger
+            id: "speed"
+        sequence:
+          - variables:
+              code: "{{ trigger.event.data.value | int(-1) }}"
+          - if: "{{ code >= 0 and code < (fan_names | length) }}"
+            then:
+              - service: climate.set_fan_mode
+                target:
+                  entity_id: "{{ climate_entity }}"
+                data:
+                  fan_mode: "{{ fan_names[code] }}"
+
+      # ---- Schwingen (1-Bit) ----
+      - conditions:
+          - condition: trigger
+            id: "swing"
+        sequence:
+          - variables:
+              d: "{{ trigger.event.data.data }}"
+              bit: >
+                {{ (d[0] if d is sequence and d is not string else d) | int(0) }}
+          - service: climate.set_swing_mode
+            target:
+              entity_id: "{{ climate_entity }}"
+            data:
+              swing_mode: "{{ swing_on_name if bit > 0 else swing_off_name }}"
+
+      # ---- HVAC-Modus (DPT 20.105) ----
+      - conditions:
+          - condition: trigger
+            id: "mode"
+        sequence:
+          - variables:
+              code: "{{ trigger.event.data.value | int(-1) | string }}"
+              ha_mode: "{{ mode_knx_to_ha.get(code) }}"
+          - if: "{{ ha_mode is not none }}"
+            then:
+              - service: climate.set_hvac_mode
+                target:
+                  entity_id: "{{ climate_entity }}"
+                data:
+                  hvac_mode: "{{ ha_mode }}"
+
+  # ===================================================================
+  # 3) Status-Rückmeldung an KNX
+  #    Bei Start, bei HA-Zustandsänderung oder bei KNX-Leseanfrage
+  # ===================================================================
+  - if: "{{ trigger.id in ['initialize', 'climate_entity', 'read_states'] }}"
+    then:
+      - variables:
+          cur_state: "{{ states(climate_entity) }}"
+          is_on: "{{ cur_state not in ['off', 'unavailable', 'unknown', 'none'] }}"
+
+      # Schalten Status (1-Bit)
+      - if: "{{ on_off_state_address != '' }}"
+        then:
+          - service: knx.send
+            data:
+              address: "{{ on_off_state_address }}"
+              payload: "{{ 1 if is_on else 0 }}"
+
+      # HVAC-Modus Status (DPT 20.105 == 1 Byte)
+      - if: >
+          {{ mode_state_address != '' and is_on
+             and mode_ha_to_knx.get(cur_state) is not none }}
+        then:
+          - service: knx.send
+            data:
+              address: "{{ mode_state_address }}"
+              type: "1byte_unsigned"
+              payload: "{{ mode_ha_to_knx.get(cur_state) }}"
+
+      # Sollwert Status (DPT 9.001)
+      - if: >
+          {{ target_temperature_state_address != ''
+             and state_attr(climate_entity, 'temperature') is not none }}
+        then:
+          - service: knx.send
+            data:
+              address: "{{ target_temperature_state_address }}"
+              type: "temperature"
+              payload: "{{ state_attr(climate_entity, 'temperature') | float }}"
+
+      # Lüfter Status (DPT 5.010)
+      - if: >
+          {{ speed_state_address != ''
+             and state_attr(climate_entity, 'fan_mode') in fan_names }}
+        then:
+          - service: knx.send
+            data:
+              address: "{{ speed_state_address }}"
+              type: "1byte_unsigned"
+              payload: "{{ fan_names.index(state_attr(climate_entity, 'fan_mode')) }}"
+
+      # Schwingen Status (1-Bit)
+      - if: "{{ swing_state_address != '' }}"
+        then:
+          - service: knx.send
+            data:
+              address: "{{ swing_state_address }}"
+              payload: "{{ 1 if state_attr(climate_entity, 'swing_mode') == swing_on_name else 0 }}"blueprint:
+  name: Klimaanlage über KNX steuern (5 Steuer- + 5 Status-Objekte)
+  description: >
+    Spiegelt eine Home-Assistant-Climate-Entität auf KNX-Gruppenadressen –
+    gleicher Ansatz wie das KNX-Daikin-Blueprint von kalhimeo, aber reduziert
+    auf genau 5 Steuer- und 5 Status-Objekte.
+
+    Steuerung (KNX -> HA):
+      * Schalten        DPT 1.001   (0/1)
+      * Sollwert        DPT 9.001   (°C)
+      * Lüfterstufe     DPT 5.010   (0=Auto, 1, 2, 3)
+      * Schwingen       DPT 1.001   (0/1)
+      * HVAC-Modus      DPT 20.105  (0=Auto, 1=Heizen, 3=Kühlen, 9=Lüfter, 14=Entfeuchten)
+
+    Rückmeldung (HA -> KNX) über die 5 Status-Gruppenadressen, inkl. Antwort
+    auf KNX-Leseanfragen (GroupValueRead) und Re-Registrierung nach Neustart
+    bzw. Automations-Reload.
+
+    Wichtig: Steuer- und Status-GA müssen unterschiedlich sein (sonst Rückkopplung).
+  domain: automation
+  author: Claude (nach dem Ansatz von kalhimeo)
+
+  input:
+    climate_entity:
+      name: Climate-Entität
+      description: Die in Home Assistant zu steuernde Klimaanlage.
+      selector:
+        entity:
+          domain: climate
+
+    steuerung:
+      name: Steuer-Gruppenadressen (KNX -> HA)
+      icon: mdi:import
+      collapsed: false
+      input:
+        on_off_address:
+          name: Schalten (DPT 1.001)
+          description: "GA zum Ein-/Ausschalten. Beispiel: '3/0/0' (leer = ungenutzt)"
+          default: ""
+        target_temperature_address:
+          name: Sollwert Temperatur (DPT 9.001)
+          description: "GA für die Zieltemperatur. Beispiel: '3/0/1' (leer = ungenutzt)"
+          default: ""
+        speed_address:
+          name: Lüftergeschwindigkeit (DPT 5.010)
+          description: "GA für die Lüfterstufe (0=Auto, 1, 2, 3). Beispiel: '3/0/2' (leer = ungenutzt)"
+          default: ""
+        swing_address:
+          name: Schwingen (DPT 1.001)
+          description: "GA für Swing an/aus. Beispiel: '3/0/3' (leer = ungenutzt)"
+          default: ""
+        mode_address:
+          name: HVAC-Modus (DPT 20.105)
+          description: >
+            GA für den Betriebsmodus (0=Auto, 1=Heizen, 3=Kühlen, 9=Lüfter,
+            14=Entfeuchten). Beispiel: '3/0/4' (leer = ungenutzt)
+          default: ""
+
+    status:
+      name: Status-Gruppenadressen (HA -> KNX Rückmeldung)
+      icon: mdi:export
+      collapsed: false
+      input:
+        on_off_state_address:
+          name: Schalten Status (DPT 1.001)
+          description: "GA für die Ein/Aus-Rückmeldung. Beispiel: '3/1/0' (leer = ungenutzt)"
+          default: ""
+        target_temperature_state_address:
+          name: Sollwert Status (DPT 9.001)
+          description: "GA für die Sollwert-Rückmeldung. Beispiel: '3/1/1' (leer = ungenutzt)"
+          default: ""
+        speed_state_address:
+          name: Lüfter Status (DPT 5.010)
+          description: "GA für die Lüfterstufen-Rückmeldung. Beispiel: '3/1/2' (leer = ungenutzt)"
+          default: ""
+        swing_state_address:
+          name: Schwingen Status (DPT 1.001)
+          description: "GA für die Swing-Rückmeldung. Beispiel: '3/1/3' (leer = ungenutzt)"
+          default: ""
+        mode_state_address:
+          name: HVAC-Modus Status (DPT 20.105)
+          description: "GA für die Modus-Rückmeldung. Beispiel: '3/1/4' (leer = ungenutzt)"
+          default: ""
+
+    zuordnung:
+      name: Zuordnung / Mapping (nur anpassen, falls deine Entität andere Namen nutzt)
+      icon: mdi:swap-horizontal
+      collapsed: true
+      input:
+        auto_hvac_mode:
+          name: HA-Modus für „Automatik" (KNX 0)
+          description: >
+            HVAC-Modus, der bei KNX-Wert 0 gesetzt wird. Übliche Werte:
+            'heat_cool' oder 'auto' – je nachdem was deine Klimaanlage unterstützt.
+          default: heat_cool
+          selector:
+            text:
+        fan_auto_name:
+          name: Lüfter-Name für KNX 0 (Auto)
+          default: auto
+          selector:
+            text:
+        fan_1_name:
+          name: Lüfter-Name für KNX 1
+          default: low
+          selector:
+            text:
+        fan_2_name:
+          name: Lüfter-Name für KNX 2
+          default: medium
+          selector:
+            text:
+        fan_3_name:
+          name: Lüfter-Name für KNX 3
+          default: high
+          selector:
+            text:
+        swing_on_name:
+          name: Swing-Name für „an" (KNX 1)
+          default: "on"
+          selector:
+            text:
+        swing_off_name:
+          name: Swing-Name für „aus" (KNX 0)
+          default: "off"
+          selector:
+            text:
+
+mode: parallel
+max_exceeded: silent
+
+variables:
+  climate_entity: !input climate_entity
+  on_off_address: !input on_off_address
+  target_temperature_address: !input target_temperature_address
+  speed_address: !input speed_address
+  swing_address: !input swing_address
+  mode_address: !input mode_address
+  on_off_state_address: !input on_off_state_address
+  target_temperature_state_address: !input target_temperature_state_address
+  speed_state_address: !input speed_state_address
+  swing_state_address: !input swing_state_address
+  mode_state_address: !input mode_state_address
+  auto_hvac_mode: !input auto_hvac_mode
+  swing_on_name: !input swing_on_name
+  swing_off_name: !input swing_off_name
+  # KNX-Code 0..3 == Listenindex
+  fan_names:
+    - !input fan_auto_name
+    - !input fan_1_name
+    - !input fan_2_name
+    - !input fan_3_name
+  swing_names:
+    - !input swing_off_name
+    - !input swing_on_name
+  # KNX 20.105 -> HA hvac_mode
+  mode_knx_to_ha:
+    "0": !input auto_hvac_mode
+    "1": heat
+    "3": cool
+    "9": fan_only
+    "14": dry
+  # HA hvac_mode -> KNX 20.105
+  mode_ha_to_knx:
+    heat: 1
+    cool: 3
+    fan_only: 9
+    dry: 14
+    auto: 0
+    heat_cool: 0
+
+trigger:
+  # --- Re-Registrierung nach Start / Reload ---
+  - platform: homeassistant
+    event: start
+    id: "initialize"
+  - platform: event
+    event_type: automation_reloaded
+    id: "initialize"
+  - platform: event
+    event_type: service_registered
+    event_data:
+      domain: knx
+      service: event_register
+    id: "initialize"
+
+  # --- HA-Zustandsänderung der Klimaanlage -> Status auf KNX schieben ---
+  - platform: state
+    entity_id: !input climate_entity
+    id: "climate_entity"
+
+  # --- Eingehende KNX-Steuerbefehle (GroupValueWrite) ---
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input on_off_address
+      telegramtype: GroupValueWrite
+      direction: Incoming
+    id: "on_off"
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input target_temperature_address
+      telegramtype: GroupValueWrite
+      direction: Incoming
+    id: "target_temperature"
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input speed_address
+      telegramtype: GroupValueWrite
+      direction: Incoming
+    id: "speed"
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input swing_address
+      telegramtype: GroupValueWrite
+      direction: Incoming
+    id: "swing"
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input mode_address
+      telegramtype: GroupValueWrite
+      direction: Incoming
+    id: "mode"
+
+  # --- KNX-Leseanfragen auf Status-GAs (GroupValueRead) -> Status neu senden ---
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input on_off_state_address
+      telegramtype: GroupValueRead
+      direction: Incoming
+    id: "read_states"
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input target_temperature_state_address
+      telegramtype: GroupValueRead
+      direction: Incoming
+    id: "read_states"
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input speed_state_address
+      telegramtype: GroupValueRead
+      direction: Incoming
+    id: "read_states"
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input swing_state_address
+      telegramtype: GroupValueRead
+      direction: Incoming
+    id: "read_states"
+  - platform: event
+    event_type: knx_event
+    event_data:
+      destination: !input mode_state_address
+      telegramtype: GroupValueRead
+      direction: Incoming
+    id: "read_states"
+
+action:
+  # ===================================================================
+  # 1) Event-Registrierung (nur bei Start / Reload)
+  #    event_register ist NICHT persistent -> muss nach jedem Neustart erfolgen
+  # ===================================================================
+  - if: "{{ trigger.id == 'initialize' }}"
+    then:
+      - if: "{{ on_off_address != '' }}"
+        then:
+          - service: knx.event_register
+            data:
+              address: "{{ on_off_address }}"
+      - if: "{{ target_temperature_address != '' }}"
+        then:
+          - service: knx.event_register
+            data:
+              address: "{{ target_temperature_address }}"
+              type: "temperature"
+      - if: "{{ speed_address != '' }}"
+        then:
+          - service: knx.event_register
+            data:
+              address: "{{ speed_address }}"
+              type: "pulse"
+      - if: "{{ swing_address != '' }}"
+        then:
+          - service: knx.event_register
+            data:
+              address: "{{ swing_address }}"
+      - if: "{{ mode_address != '' }}"
+        then:
+          - service: knx.event_register
+            data:
+              address: "{{ mode_address }}"
+              type: "pulse"
+      # Status-GAs registrieren, damit Leseanfragen ein knx_event auslösen
+      - repeat:
+          for_each:
+            - "{{ on_off_state_address }}"
+            - "{{ target_temperature_state_address }}"
+            - "{{ speed_state_address }}"
+            - "{{ swing_state_address }}"
+            - "{{ mode_state_address }}"
+          sequence:
+            - if: "{{ repeat.item != '' }}"
+              then:
+                - service: knx.event_register
+                  data:
+                    address: "{{ repeat.item }}"
+
+  # ===================================================================
+  # 2) Eingehende KNX-Steuerbefehle -> Climate-Entität steuern
+  # ===================================================================
+  - choose:
+      # ---- Schalten (1-Bit) ----
+      - conditions:
+          - condition: trigger
+            id: "on_off"
+        sequence:
+          - variables:
+              d: "{{ trigger.event.data.data }}"
+              bit: >
+                {{ (d[0] if d is sequence and d is not string else d) | int(0) }}
+          - if: "{{ bit > 0 }}"
+            then:
+              - service: climate.turn_on
+                target:
+                  entity_id: "{{ climate_entity }}"
+            else:
+              - service: climate.turn_off
+                target:
+                  entity_id: "{{ climate_entity }}"
+
+      # ---- Sollwert (DPT 9.001) ----
+      - conditions:
+          - condition: trigger
+            id: "target_temperature"
+        sequence:
+          - service: climate.set_temperature
+            target:
+              entity_id: "{{ climate_entity }}"
+            data:
+              temperature: "{{ trigger.event.data.value | float }}"
+
+      # ---- Lüfterstufe (DPT 5.010, 0..3) ----
+      - conditions:
+          - condition: trigger
+            id: "speed"
+        sequence:
+          - variables:
+              code: "{{ trigger.event.data.value | int(-1) }}"
+          - if: "{{ code >= 0 and code < (fan_names | length) }}"
+            then:
+              - service: climate.set_fan_mode
+                target:
+                  entity_id: "{{ climate_entity }}"
+                data:
+                  fan_mode: "{{ fan_names[code] }}"
+
+      # ---- Schwingen (1-Bit) ----
+      - conditions:
+          - condition: trigger
+            id: "swing"
+        sequence:
+          - variables:
+              d: "{{ trigger.event.data.data }}"
+              bit: >
+                {{ (d[0] if d is sequence and d is not string else d) | int(0) }}
+          - service: climate.set_swing_mode
+            target:
+              entity_id: "{{ climate_entity }}"
+            data:
+              swing_mode: "{{ swing_on_name if bit > 0 else swing_off_name }}"
+
+      # ---- HVAC-Modus (DPT 20.105) ----
+      - conditions:
+          - condition: trigger
+            id: "mode"
+        sequence:
+          - variables:
+              code: "{{ trigger.event.data.value | int(-1) | string }}"
+              ha_mode: "{{ mode_knx_to_ha.get(code) }}"
+          - if: "{{ ha_mode is not none }}"
+            then:
+              - service: climate.set_hvac_mode
+                target:
+                  entity_id: "{{ climate_entity }}"
+                data:
+                  hvac_mode: "{{ ha_mode }}"
+
+  # ===================================================================
+  # 3) Status-Rückmeldung an KNX
+  #    Bei Start, bei HA-Zustandsänderung oder bei KNX-Leseanfrage
+  # ===================================================================
+  - if: "{{ trigger.id in ['initialize', 'climate_entity', 'read_states'] }}"
+    then:
+      - variables:
+          cur_state: "{{ states(climate_entity) }}"
+          is_on: "{{ cur_state not in ['off', 'unavailable', 'unknown', 'none'] }}"
+
+      # Schalten Status (1-Bit)
+      - if: "{{ on_off_state_address != '' }}"
+        then:
+          - service: knx.send
+            data:
+              address: "{{ on_off_state_address }}"
+              payload: "{{ 1 if is_on else 0 }}"
+
+      # HVAC-Modus Status (DPT 20.105 == 1 Byte)
+      - if: >
+          {{ mode_state_address != '' and is_on
+             and mode_ha_to_knx.get(cur_state) is not none }}
+        then:
+          - service: knx.send
+            data:
+              address: "{{ mode_state_address }}"
+              type: "1byte_unsigned"
+              payload: "{{ mode_ha_to_knx.get(cur_state) }}"
+
+      # Sollwert Status (DPT 9.001)
+      - if: >
+          {{ target_temperature_state_address != ''
+             and state_attr(climate_entity, 'temperature') is not none }}
+        then:
+          - service: knx.send
+            data:
+              address: "{{ target_temperature_state_address }}"
+              type: "temperature"
+              payload: "{{ state_attr(climate_entity, 'temperature') | float }}"
+
+      # Lüfter Status (DPT 5.010)
+      - if: >
+          {{ speed_state_address != ''
+             and state_attr(climate_entity, 'fan_mode') in fan_names }}
+        then:
+          - service: knx.send
+            data:
+              address: "{{ speed_state_address }}"
+              type: "1byte_unsigned"
+              payload: "{{ fan_names.index(state_attr(climate_entity, 'fan_mode')) }}"
+
+      # Schwingen Status (1-Bit)
+      - if: "{{ swing_state_address != '' }}"
+        then:
+          - service: knx.send
+            data:
+              address: "{{ swing_state_address }}"
+              payload: "{{ 1 if state_attr(climate_entity, 'swing_mode') == swing_on_name else 0 }}"
