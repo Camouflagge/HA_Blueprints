@@ -383,7 +383,7 @@ action:
             id: "mode"
         sequence:
           - variables:
-              code: "{{ trigger.event.data.value | int(-1) | string }}"
+              code: "{{ trigger.event.data.payload | int(-1) | string }}"
               ha_mode: "{{ mode_knx_to_ha.get(code) }}"
           - if: "{{ ha_mode is not none }}"
             then:
