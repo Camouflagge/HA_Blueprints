@@ -1,0 +1,296 @@
+blueprint:
+  name: KNX - cover control (HA-Konvention, 100=offen)
+  description: >
+    Fork von aschamberger/knx-cover-control.yaml
+    (https://gist.github.com/aschamberger/585661949b8eb8462f997279a341377a).
+    Steuert Cover-Entities über KNX Schalt- und Prozent-Telegramme (DPT 5.001).
+
+    Unterschied zum Original: Das Original nimmt die klassische KNX-Konvention
+    an (0% = auf, 100% = zu) und invertiert deshalb beim Senden/Empfangen der
+    Position. Diese Version geht davon aus, dass dein Taster/deine Visu die
+    HA-Konvention nutzt (0% = zu, 100% = auf) und sendet/empfängt die Prozentwerte
+    DIREKT, ohne Invertierung.
+  homeassistant:
+    # `knx.telegram` trigger and `enabled` templates require Home Assistant 2024.6.0
+    min_version: "2024.6.0"
+  domain: automation
+  input:
+    cover:
+      name: Cover
+      description: The cover that shall be controled.
+      selector:
+        entity:
+          domain: cover
+    up_down_address:
+      name: Cover Up/Down group address
+      description: >
+        Group address for cover up and down (DPT 1.008).
+        Example: '3/1/19'
+      default: null
+    stop_address:
+      name: Stop group address
+      description: >
+        Group address for stop (DPT 1.010)
+        Example: '3/2/19'
+      default: null
+    current_direction_address:
+      name: Current direction address
+      description: >
+        Group address for current direction (DPT 1.008).
+        Example: '3/4/19'
+      default: null
+    absolute_position_address:
+      name: Absolute position group address(es)
+      description: >
+        Group address(es) for setting absolute position (DPT 5.001).
+        Example:
+        ```
+        - 3/5/19
+        - ...
+        ```
+      selector:
+        object:
+      default: null
+    absolute_position_state_address:
+      name: Absolute position state group address
+      description: >
+        Group address for absolute position state (DPT 5.001).
+        Example: '3/6/59'
+      default: null
+    state_position_top_address:
+      name: State position top group address
+      description: >
+        Group address for absolute position state top. DPT 1.002
+        Example: '3/6/19'
+      default: null
+    state_position_down_address:
+      name: State position down group address
+      description: >
+        Group address for absolute position state down (DPT 1.002).
+        Example: '3/6/39'
+      default: null
+
+mode: parallel
+max_exceeded: silent
+variables:
+  cover_entity_id: !input cover
+  absolute_position_gas: !input absolute_position_address
+trigger_variables:
+  _up_down_address: !input up_down_address
+  _stop_address: !input stop_address
+  _current_direction_address: !input current_direction_address
+  _absolute_position_address: !input absolute_position_address
+  _absolute_position_state_address: !input absolute_position_state_address
+  _state_position_top_address: !input state_position_top_address
+  _state_position_down_address: !input state_position_down_address
+trigger:
+  - platform: knx.telegram
+    destination: !input up_down_address
+    group_value_read: false
+    group_value_response: false
+    id: up_down
+    enabled: "{{ _up_down_address != None }}"
+  - platform: knx.telegram
+    destination: !input stop_address
+    group_value_read: false
+    group_value_response: false
+    id: stop
+    enabled: "{{ _stop_address != None }}"
+  - platform: state
+    entity_id: !input cover
+    attribute: current_position
+    id: expose_direction
+    enabled: "{{ _current_direction_address != None }}"
+  - platform: knx.telegram
+    destination: !input absolute_position_address
+    group_value_read: false
+    group_value_response: false
+    id: absolute_position
+    enabled: "{{ _absolute_position_address != None }}"
+  - platform: state
+    entity_id: !input cover
+    attribute: current_position
+    id: expose_position
+    enabled: "{{ _absolute_position_state_address != None }}"
+  - platform: knx.telegram
+    destination: !input absolute_position_state_address
+    group_value_write: false
+    group_value_response: false
+    id: expose_position_read
+    enabled: "{{ _absolute_position_state_address != None }}"
+  - platform: state
+    entity_id: !input cover
+    attribute: current_position
+    to: 100
+    id: expose_top
+    enabled: "{{ _state_position_top_address != None }}"
+  - platform: state
+    entity_id: !input cover
+    attribute: current_position
+    to: 0
+    id: expose_down
+    enabled: "{{ _state_position_down_address != None }}"
+  - platform: state
+    entity_id: !input cover
+    attribute: current_position
+    from: 100
+    id: expose_top_gone
+    enabled: "{{ _state_position_top_address != None }}"
+  - platform: state
+    entity_id: !input cover
+    attribute: current_position
+    from: 0
+    id: expose_down_gone
+    enabled: "{{ _state_position_down_address != None }}"
+  - platform: knx.telegram
+    destination: !input state_position_top_address
+    group_value_write: false
+    group_value_response: false
+    id: expose_top_read
+    enabled: "{{ _state_position_top_address != None }}"
+  - platform: knx.telegram
+    destination: !input state_position_down_address
+    group_value_write: false
+    group_value_response: false
+    id: expose_down_read
+    enabled: "{{ _state_position_down_address != None }}"
+action:
+  - choose:
+      # UP
+      - conditions:
+          condition: and
+          conditions:
+            - condition: trigger
+              id: up_down
+            - "{{ trigger.payload == 0 }}"
+        sequence:
+          - service: cover.open_cover
+            entity_id: !input "cover"
+      # DOWN
+      - conditions:
+          condition: and
+          conditions:
+            - condition: trigger
+              id: up_down
+            - "{{ trigger.payload == 1 }}"
+        sequence:
+          - service: cover.close_cover
+            entity_id: !input cover
+      # STOP
+      - conditions:
+          condition: and
+          conditions:
+            - condition: trigger
+              id: stop
+        sequence:
+          - service: cover.stop_cover
+            entity_id: !input cover
+      # EXPOSE CURRENT DIRECTION: 0 up, 1 down
+      # this is not the same as with KNX where the direction is sent when cover movement is startet
+      # could be sent above when triggered from KNX, then however state is missing when triggered via UI
+      - conditions:
+          condition: and
+          conditions:
+            - condition: trigger
+              id: expose_direction
+        sequence:
+          - service: knx.send
+            data:
+              address: !input current_direction_address
+              payload: "{% if trigger.to_state.attributes.current_position - trigger.from_state.attributes.current_position > 0 %}0{% else %}1{% endif %}"
+      # SET ABSOLUTE POSITION
+      # GEAENDERT: kein Invertieren mehr - Payload 0 = Position 0 (zu), Payload 255 = Position 100 (auf)
+      - conditions:
+          condition: and
+          conditions:
+            - condition: trigger
+              id: absolute_position
+        sequence:
+          - service: cover.set_cover_position
+            entity_id: !input cover
+            data:
+              position: "{{ (trigger.payload[0]/255)*100 }}"
+      # EXPOSE ABSOLUTE POSITION STATE
+      # GEAENDERT: kein Invertieren mehr - HA-Position wird 1:1 als Prozent gesendet
+      - conditions:
+          condition: or
+          conditions:
+            - condition: trigger
+              id: expose_position
+            - condition: trigger
+              id: expose_position_read
+        sequence:
+          - service: knx.send
+            data:
+              address: !input absolute_position_state_address
+              payload: "{% if state_attr(cover_entity_id, 'current_position') == None %}0{% else %}{{ state_attr(cover_entity_id, 'current_position') }}{% endif %}"
+              response: "{{ trigger.id == 'expose_position_read' }}"
+              type: percent
+      # EXPOSE TOP
+      - conditions:
+          condition: and
+          conditions:
+            - condition: trigger
+              id: expose_top
+        sequence:
+          - service: knx.send
+            data:
+              address: !input state_position_top_address
+              payload: 1
+      # EXPOSE DOWN
+      - conditions:
+          condition: and
+          conditions:
+            - condition: trigger
+              id: expose_down
+        sequence:
+          - service: knx.send
+            data:
+              address: !input state_position_down_address
+              payload: 1
+      # EXPOSE TOP GONE
+      - conditions:
+          condition: and
+          conditions:
+            - condition: trigger
+              id: expose_top_gone
+        sequence:
+          - service: knx.send
+            data:
+              address: !input state_position_top_address
+              payload: 0
+      # EXPOSE DOWN GONE
+      - conditions:
+          condition: and
+          conditions:
+            - condition: trigger
+              id: expose_down_gone
+        sequence:
+          - service: knx.send
+            data:
+              address: !input state_position_down_address
+              payload: 0
+      # EXPOSE TOP READ
+      - conditions:
+          condition: and
+          conditions:
+            - condition: trigger
+              id: expose_top_read
+        sequence:
+          - service: knx.send
+            data:
+              address: !input state_position_top_address
+              payload: "{{ is_state_attr(cover_entity_id, 'current_position', 100) }}"
+              response: 1
+      # EXPOSE DOWN READ
+      - conditions:
+          condition: and
+          conditions:
+            - condition: trigger
+              id: expose_down_read
+        sequence:
+          - service: knx.send
+            data:
+              address: !input state_position_down_address
+              payload: "{{ is_state_attr(cover_entity_id, 'current_position', 0) }}"
+              response: 1
